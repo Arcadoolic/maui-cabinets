@@ -1,0 +1,3 @@
+# Raspberry Pi OS locks the root account (passwd -S root -> "L") and puts the first user in
+# the sudo group: su cannot work, root is reached with sudo and the kiosk user's own password.
+ansible_become_method: sudo

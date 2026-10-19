@@ -1,0 +1,7 @@
+*.retry
+.DS_Store
+# Your own cabinets (just init), kept on your workstation
+/inventory/
+# Virtualenv and collections of just setup
+/.venv/
+/.ansible/

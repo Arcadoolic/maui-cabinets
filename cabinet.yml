@@ -1,0 +1,451 @@
+---
+# Prepares a dedicated Debian 13 machine (x86_64 or arm64) to run MAUI as an arcade cabinet kiosk.
+# Ansible translation of maui's docs/RASPBERRY-PI-DEPLOY.md (see README.md). What depends on the
+# architecture lives in group_vars/.
+#
+#   ansible-playbook cabinet.yml -l arcade-pacman -K --check --diff   # dry run (just check)
+#   ansible-playbook cabinet.yml -l arcade-pacman -K                  # real run (just apply)
+#
+# -K asks for the ROOT password: privilege escalation goes through su (ansible.cfg).
+
+- name: Bootstrap Python on a minimal Debian install
+  hosts: cabinets
+  gather_facts: false
+  become: true
+  tasks:
+    # python3 for every module, python3-apt for the apt module (mandatory in --check mode,
+    # where apt cannot install it on the fly). Runs in check mode too, or nothing else could.
+    - name: Install python3 and python3-apt if missing
+      ansible.builtin.raw: >-
+        test -x /usr/bin/python3 && dpkg-query -W -f='${Status}' python3-apt 2>/dev/null | grep -q 'ok installed'
+        || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-apt)
+      register: bootstrap
+      changed_when: "'Setting up python3' in bootstrap.stdout"
+      check_mode: false
+
+- name: Prepare the MAUI cabinet
+  hosts: cabinets
+  become: true
+
+  vars:
+    maui_version: "2.16.1"
+    # maui_appimage_arch and maui_appimage_sha256 come from group_vars/<architecture>.yml
+    maui_appimage: "mame-awesome-ui-{{ maui_version }}-linux-{{ maui_appimage_arch }}.AppImage"
+    maui_appimage_url: "https://github.com/Arcadoolic/maui/releases/download/{{ maui_version }}/{{ maui_appimage }}"
+    kiosk_home: "/home/{{ kiosk_user }}"
+    homebrew_prefix: /home/linuxbrew/.linuxbrew
+    homebrew_env:
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+      NONINTERACTIVE: "1"
+      PATH: "{{ homebrew_prefix }}/bin:{{ homebrew_prefix }}/sbin:/usr/local/bin:/usr/bin:/bin"
+
+    system_packages:
+      # Homebrew prerequisites
+      - build-essential
+      - procps
+      - curl
+      - file
+      - git
+      # AppImage runtime: unversioned libz.so for the squashfs, FUSE2 ABI
+      - zlib1g-dev
+      - libfuse2t64
+      # Electron / Chromium runtime libraries (no desktop environment installed)
+      - libatk1.0-0t64
+      - libatk-bridge2.0-0t64
+      - libatspi2.0-0t64
+      - libcups2t64
+      - libcairo2
+      - libgtk-3-0t64
+      - libpango-1.0-0
+      - libxcomposite1
+      - libxdamage1
+      - libxfixes3
+      - libxrandr2
+      - libgbm1
+      - libxkbcommon0
+      - libnss3
+      - libasound2t64
+      # Minimal X server + kiosk window manager (needed to honour fullscreen)
+      - xserver-xorg
+      - xinit
+      - x11-xserver-utils
+      - matchbox-window-manager
+      - libgl1-mesa-dri
+      # Audio test tools (aplay, amixer) and the narrow kiosk-restart sudoers rule
+      - alsa-utils
+      - sudo
+      # Wi-Fi and Bluetooth, set from the BO's MAUI > Network and Bluetooth tabs: nmcli
+      # (NetworkManager leaves the wired interface of /etc/network/interfaces to ifupdown),
+      # rfkill and bluetoothctl. The radios themselves are switched on in the BIOS / firmware;
+      # the chip's firmware package, e.g. firmware-iwlwifi, comes with the Debian install.
+      - network-manager
+      - iw
+      - rfkill
+      - bluez
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Restart kiosk session
+      ansible.builtin.systemd_service:
+        name: getty@tty1
+        state: restarted
+
+    # Absolute path: /usr/sbin is not in the PATH of a root reached with su.
+    - name: Apply sysctl settings
+      ansible.builtin.command:
+        cmd: /usr/sbin/sysctl --system
+      changed_when: true
+
+    - name: Reload NetworkManager
+      ansible.builtin.systemd_service:
+        name: NetworkManager
+        state: reloaded
+
+  pre_tasks:
+    - name: Refuse anything but the expected target
+      ansible.builtin.assert:
+        that:
+          - expected_architecture is defined
+          - ansible_facts.architecture == expected_architecture
+          - ansible_facts.distribution == 'Debian'
+          - ansible_facts.distribution_major_version == '13'
+          - kiosk_user is defined
+          - kiosk_user == ansible_user
+        fail_msg: >-
+          Expected Debian 13 {{ expected_architecture | default('(no architecture group)') }}
+          with kiosk_user == ansible_user, got
+          {{ ansible_facts.distribution }} {{ ansible_facts.distribution_major_version }}
+          {{ ansible_facts.architecture }}, kiosk_user={{ kiosk_user | default('undefined') }},
+          ansible_user={{ ansible_user }}.
+
+    - name: Refuse a malformed kiosk resolution
+      ansible.builtin.assert:
+        that: kiosk_resolution is match('^([0-9]+x[0-9]+)?$')
+        fail_msg: "kiosk_resolution must be WIDTHxHEIGHT (e.g. 1920x1080) or empty, got '{{ kiosk_resolution }}'."
+
+    - name: Check the configured HDMI sound card exists
+      ansible.builtin.stat:
+        path: "/proc/asound/{{ alsa_hdmi_card }}"
+      register: hdmi_card
+
+    - name: Refuse an unknown sound card
+      ansible.builtin.assert:
+        that: hdmi_card.stat.exists
+        fail_msg: "No ALSA card '{{ alsa_hdmi_card }}' on this host, check alsa_hdmi_card (cat /proc/asound/pcm)."
+
+  tasks:
+    # --- System packages -------------------------------------------------------------------
+    - name: Install system packages
+      ansible.builtin.apt:
+        name: "{{ system_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Give the kiosk user access to GPU and sound devices
+      ansible.builtin.user:
+        name: "{{ kiosk_user }}"
+        groups: [video, render, audio]
+        append: true
+
+    # --- Homebrew + MAME (bottles exist for x86_64_linux and arm64_linux) -------------------
+    - name: Create the Homebrew prefix, owned by the kiosk user
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0755"
+      loop:
+        - /home/linuxbrew
+        - "{{ homebrew_prefix }}"
+        - "{{ homebrew_prefix }}/bin"
+
+    - name: Check whether Homebrew is already installed
+      ansible.builtin.stat:
+        path: "{{ homebrew_prefix }}/bin/brew"
+      register: homebrew_brew
+
+    # A first --check run cannot preview this: git and the Homebrew checkout do not exist yet
+    # (apt only pretended to install them). Skipped in that case, always run for real.
+    - name: Install Homebrew and MAME
+      become: false
+      when: not ansible_check_mode or homebrew_brew.stat.exists
+      block:
+        - name: Clone Homebrew (git, no curl | bash)
+          ansible.builtin.git:
+            repo: https://github.com/Homebrew/brew
+            dest: "{{ homebrew_prefix }}/Homebrew"
+            update: false
+
+        - name: Link the brew executable
+          ansible.builtin.file:
+            src: ../Homebrew/bin/brew
+            dest: "{{ homebrew_prefix }}/bin/brew"
+            state: link
+
+        - name: Load Homebrew in interactive shells
+          ansible.builtin.lineinfile:
+            path: "{{ kiosk_home }}/.bashrc"
+            line: 'eval "$({{ homebrew_prefix }}/bin/brew shellenv bash)"'
+
+        - name: Install MAME from Homebrew (prebuilt bottle, still several minutes)
+          ansible.builtin.command:
+            cmd: "{{ homebrew_prefix }}/bin/brew install mame"
+            creates: "{{ homebrew_prefix }}/opt/mame/bin/mame"
+          environment: "{{ homebrew_env }}"
+          async: 3600
+          poll: 30
+
+    # --- MAUI ------------------------------------------------------------------------------
+    - name: Create the MAUI config directory
+      become: false
+      ansible.builtin.file:
+        path: "{{ kiosk_home }}/.mame-awesome-ui"
+        state: directory
+        mode: "0700"
+
+    - name: Pre-seed the MAUI config (skips the first-run setup screen, never overwritten)
+      become: false
+      ansible.builtin.template:
+        src: mame-awesome-ui-config.json.j2
+        dest: "{{ kiosk_home }}/.mame-awesome-ui/mame-awesome-ui-config.json"
+        mode: "0600"
+        force: false
+
+    - name: Download the MAUI AppImage
+      become: false
+      ansible.builtin.get_url:
+        url: "{{ maui_appimage_url }}"
+        dest: "{{ kiosk_home }}/{{ maui_appimage }}"
+        checksum: "sha256:{{ maui_appimage_sha256 }}"
+        mode: "0755"
+
+    # Extracted once; later versions are installed from the BO (MAUI > Update), which swaps
+    # ~/squashfs-root itself. The playbook therefore never replaces an existing extraction.
+    - name: Extract the AppImage to ~/squashfs-root
+      become: false
+      ansible.builtin.command:
+        cmd: "./{{ maui_appimage }} --appimage-extract"
+        chdir: "{{ kiosk_home }}"
+        creates: "{{ kiosk_home }}/squashfs-root/AppRun"
+
+    - name: Look for missing shared libraries
+      become: false
+      ansible.builtin.shell:
+        cmd: set -o pipefail && ldd {{ kiosk_home }}/squashfs-root/mame-awesome-ui | grep 'not found' || true
+        executable: /bin/bash
+      register: missing_libs
+      changed_when: false
+      failed_when: missing_libs.stdout | length > 0
+      when: not ansible_check_mode
+
+    # --- Audio -----------------------------------------------------------------------------
+    - name: Route the default ALSA output to the HDMI screen
+      ansible.builtin.template:
+        src: asound.conf.j2
+        dest: /etc/asound.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    # --- Kiosk session (order matters: X must be installed before autologin, §5.5) ---------
+    - name: Install ~/.xinitrc
+      become: false
+      ansible.builtin.template:
+        src: xinitrc.j2
+        dest: "{{ kiosk_home }}/.xinitrc"
+        mode: "0755"
+      notify: Restart kiosk session
+
+    - name: Install ~/.bash_profile (startx on tty1)
+      become: false
+      ansible.builtin.template:
+        src: bash_profile.j2
+        dest: "{{ kiosk_home }}/.bash_profile"
+        mode: "0644"
+      notify: Restart kiosk session
+
+    - name: Allow the kiosk user to restart its session from the BO (validated by visudo)
+      ansible.builtin.template:
+        src: sudoers-restart-kiosk.j2
+        dest: "/etc/sudoers.d/{{ kiosk_user }}-restart-kiosk"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    # MAUI's back office answers on port 80 too on a cabinet (maui: src/boCore.ts), so that the
+    # address shown on the screen is all there is to type. The application runs as the kiosk
+    # user: ports from 80 up are opened to unprivileged processes. Read by MAUI when it starts.
+    - name: Let the kiosk user open port 80 for the back office
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-maui-back-office-port.conf
+        content: |
+          # Managed by Ansible (maui-cabinets, cabinet.yml)
+          net.ipv4.ip_unprivileged_port_start = 80
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Apply sysctl settings
+        - Restart kiosk session
+
+    - name: Keep a rescue console on tty2
+      ansible.builtin.systemd_service:
+        name: getty@tty2
+        enabled: true
+        state: started
+
+    - name: Create the getty@tty1 drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/getty@tty1.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Autologin the kiosk user on tty1
+      ansible.builtin.template:
+        src: getty-autologin.conf.j2
+        dest: /etc/systemd/system/getty@tty1.service.d/override.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart kiosk session
+
+    # --- Netskope client (company cabinets: hosts that define netskope_tenant_host) ---------
+    # STAgent.run is a one-shot installer: it sets up /opt/netskope/stagent and the stagentd
+    # service, which starts at every boot, then enrols the machine in the tenant. Nothing has to
+    # run again afterwards. The enrolment is what this block watches: a client that is installed
+    # but not enrolled is removed and installed again.
+    - name: Enrol the Netskope client
+      when: netskope_tenant_host is defined
+      block:
+        - name: Read the Netskope client status
+          ansible.builtin.command:
+            cmd: /opt/netskope/stagent/nsdiag -f
+          register: netskope_status
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Install and enrol the Netskope client
+          when: netskope_tenant_host not in (netskope_status.stdout | default(''))
+          block:
+            - name: Check for a previous Netskope installation
+              ansible.builtin.stat:
+                path: /opt/netskope/stagent/uninstall.sh
+              register: netskope_uninstaller
+
+            - name: Remove the unenrolled Netskope client
+              ansible.builtin.command:
+                cmd: /opt/netskope/stagent/uninstall.sh
+              when: netskope_uninstaller.stat.exists
+              changed_when: true
+
+            # The installer checks these itself and waits for an answer on a missing one,
+            # which hangs the run: they are installed first.
+            - name: Install the libraries the Netskope client needs
+              ansible.builtin.apt:
+                name:
+                  - libgtk-3-0t64
+                  - libwebkit2gtk-4.1-0
+                  - libayatana-appindicator3-1
+                  - iptables
+                  - systemd-resolved
+                state: present
+
+            - name: Download the Netskope installer from the tenant
+              ansible.builtin.get_url:
+                url: "https://download-{{ netskope_tenant_host }}/dlr/linux/get"
+                dest: /root/STAgent.run
+                owner: root
+                group: root
+                mode: "0700"
+
+            # Email enrolment (-H, -o, -m). No -i: that flag selects the IdP mode, which
+            # ignores these options and waits for a login in a browser the kiosk does not have.
+            - name: Run the Netskope installer (enrolment tokens from the vault)
+              ansible.builtin.command:
+                argv:
+                  - /root/STAgent.run
+                  - -H
+                  - "{{ netskope_tenant_host }}"
+                  - -o
+                  - "{{ netskope_org_key }}"
+                  - -a
+                  - "{{ netskope_enroll_auth_token }}"
+                  - -e
+                  - "{{ netskope_enroll_encryption_token }}"
+                  - -m
+                  - "{{ netskope_enroll_email }}"
+                chdir: /root
+              changed_when: true
+              no_log: true
+              timeout: 900
+
+            - name: Start the Netskope client at boot
+              ansible.builtin.systemd_service:
+                name: stagentd
+                enabled: true
+                state: started
+
+            - name: Wait for the Netskope client to be enrolled in the tenant
+              ansible.builtin.command:
+                cmd: /opt/netskope/stagent/nsdiag -f
+              register: netskope_enrolment
+              changed_when: false
+              until: netskope_tenant_host in netskope_enrolment.stdout
+              retries: 12
+              delay: 5
+              when: not ansible_check_mode
+
+        # The installer, and the copies of the enrolment command left by manual attempts.
+        - name: Remove the Netskope installer and enrolment leftovers
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /root/STAgent.run
+            - /opt/STAgent.run
+            - /opt/cmd.txt
+
+    # --- Wi-Fi (hosts that define wifi_ssid) -----------------------------------------------
+    # The profile is declared ahead of time: the network need not be in range, NetworkManager
+    # connects by itself once it is. The wired interface stays with ifupdown.
+    - name: Provision the Wi-Fi profile
+      when: wifi_ssid is defined
+      block:
+        # The network filters on the dongle's MAC address: never show a random one.
+        - name: Keep the real MAC address while scanning for networks
+          ansible.builtin.copy:
+            dest: /etc/NetworkManager/conf.d/90-maui-wifi-mac.conf
+            content: |
+              # Managed by Ansible (maui-cabinets, cabinet.yml)
+              [device]
+              wifi.scan-rand-mac-address=no
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Reload NetworkManager
+
+        # Not previewed by a first --check run: nmcli is not installed yet. With a key, the
+        # module cannot read the stored secret back and reports a change on every run.
+        - name: Declare the Wi-Fi network
+          community.general.nmcli:
+            conn_name: "{{ wifi_ssid }}"
+            type: wifi
+            ifname: "{{ wifi_interface }}"
+            ssid: "{{ wifi_ssid }}"
+            autoconnect: true
+            wifi:
+              cloned-mac-address: permanent
+            wifi_sec: "{{ {'key-mgmt': 'wpa-psk', 'psk': wifi_psk} if wifi_psk is defined else omit }}"
+            state: present
+          no_log: true
+          when: not ansible_check_mode

@@ -1,0 +1,4 @@
+# Display mode forced on the screen at the start of the kiosk session (WIDTHxHEIGHT).
+# Without it X picks the screen's native mode: 3840x2160 on a 4K screen, too heavy for
+# Electron + MAME. Empty string keeps the native mode. Override per cabinet in host_vars/.
+kiosk_resolution: "1920x1080"

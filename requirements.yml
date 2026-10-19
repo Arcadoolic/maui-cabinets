@@ -1,0 +1,5 @@
+# Ansible collections used by cabinet.yml, installed in .ansible/collections (just setup).
+collections:
+  # community.general.nmcli: the Wi-Fi profile
+  - name: community.general
+    version: 13.1.0

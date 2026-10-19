@@ -1,0 +1,20 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Kiosk session: no screen blanking, a window manager to honour fullscreen, then the app.
+xset -dpms
+xset s off
+xset s noblank
+{% if kiosk_resolution %}
+# Cap the display at {{ kiosk_resolution }} on the first connected output (name differs between
+# the Pi and Intel). Keeps the native mode if the screen does not offer this one.
+output=$(xrandr --query | awk '/ connected/ {print $1; exit}')
+[ -n "$output" ] && xrandr --output "$output" --mode {{ kiosk_resolution }} || true
+{% endif %}
+matchbox-window-manager -use_titlebar no &
+# Homebrew's MAME (SDL3) can deadlock on exit through PulseAudio: force ALSA
+# (maui: docs/RASPBERRY-PI-DEPLOY.md §6.4).
+export SDL_AUDIO_DRIVER=alsa
+# Node only trusts its bundled certificate authorities: add the system's, where a company
+# proxy (Netskope) puts the one it re-signs HTTPS with. Without it MAUI > Update fails to fetch.
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+exec {{ kiosk_home }}/squashfs-root/AppRun

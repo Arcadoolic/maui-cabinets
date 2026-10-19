@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Default ALSA output = the device set in host_vars (the HDMI port wired to the screen, or the
+# analog jack), through plug for format conversion.
+pcm.!default {
+    type plug
+    slave.pcm "hw:{{ alsa_hdmi_card }},{{ alsa_hdmi_device }}"
+}
+ctl.!default {
+    type hw
+    card {{ alsa_hdmi_card }}
+}

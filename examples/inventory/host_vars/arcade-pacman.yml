@@ -1,0 +1,21 @@
+# Settings of one cabinet, named after its host in inventory.yml. A cabinet with secrets uses a
+# directory instead: host_vars/<host>/vars.yml + host_vars/<host>/vault.yml (see README).
+
+# Account that autologs on tty1 and runs the kiosk session. Must be its ansible_user.
+kiosk_user: pacman
+
+# ALSA device of the sound output actually wired to the speakers (cat /proc/asound/pcm):
+#   "00-03: HDMI 0"             -> card PCH, device 3 (Intel HDMI)
+#   "00-00: ... Analog"         -> card PCH, device 0 (Intel analog jack)
+#   "01-00: MAI PCM i2s-hifi-0" -> card vc4hdmi, device 0 (Raspberry Pi HDMI)
+alsa_hdmi_card: PCH
+alsa_hdmi_device: 3
+
+# Display mode of the kiosk session (WIDTHxHEIGHT), default in group_vars/all.yml.
+# An empty string keeps the screen's native mode.
+# kiosk_resolution: "1920x1080"
+
+# Optional Wi-Fi network, declared in NetworkManager (see README, Company network).
+# wifi_interface: wlan0
+# wifi_ssid: "My network"
+# wifi_psk: "{{ vault_wifi_psk }}"   # from host_vars/<host>/vault.yml

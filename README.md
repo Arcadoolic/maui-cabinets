@@ -1,0 +1,284 @@
+# maui-cabinets
+
+Ansible playbook for the dedicated MAUI arcade cabinets. `cabinet.yml` turns a fresh Debian 13
+install (x86_64 or arm64) into a MAUI kiosk: MAME, the MAUI AppImage, a minimal X session that
+starts on boot, sound, and the back office (BO) on port 80. It automates the steps of
+[`docs/RASPBERRY-PI-DEPLOY.md`](https://github.com/Arcadoolic/maui/blob/develop/docs/RASPBERRY-PI-DEPLOY.md)
+from the [maui](https://github.com/Arcadoolic/maui) repository; read that document for the
+reasoning behind each step.
+
+New cabinets get **MAUI 2.16.1** (`maui_version` in `cabinet.yml`).
+
+## Prerequisites
+
+### On the workstation
+
+- Linux or macOS, with `git`, `ssh` and Python 3.12 or later with its `venv` module
+  (`sudo apt install python3-venv` on Debian and Ubuntu).
+- [just](https://github.com/casey/just), to run the recipes of the `justfile`
+  (`sudo apt install just`, `brew install just`).
+- An SSH key (`ssh-keygen -t ed25519` if you have none).
+
+Ansible itself is not needed: `just setup` installs the pinned version (`requirements.txt`) and
+its collections (`requirements.yml`) in the project, in `.venv/` and `.ansible/collections/`,
+both ignored by git. The recipes always use that copy, never a system-wide Ansible.
+
+### On the cabinet
+
+- **Hardware**: an x86_64 PC (tested on Intel graphics and sound: NUC, small desktop PC) or an
+  arm64 Raspberry Pi (Pi 4, Pi 3 tested). A screen, and speakers on the output you will choose
+  for sound (HDMI or analog jack), plugged in before the first run: the playbook checks the
+  sound card exists.
+- **Operating system**: Debian 13 (trixie) netinst, 64-bit, **no desktop environment**, with
+  the *SSH server* task selected. On a Raspberry Pi, Raspberry Pi OS Lite 64-bit (Debian 13
+  based) does the job.
+- **Accounts**:
+  - the kiosk account (e.g. `pacman`), created by the installer. It autologs on the screen and
+    runs MAUI. Its name is `kiosk_user` and must be the SSH user (`ansible_user`).
+  - a root password, set in the installer. The kiosk account gets no general sudo rights, so
+    Ansible becomes root with `su` and asks for that password on every run. Do not leave it
+    empty: the Debian installer then locks root and `su` cannot work.
+    Exception: on Raspberry Pi OS root is locked, so the `raspberry_pi` group uses `sudo` and the
+    password asked is the kiosk account's own.
+- **Network**: the cabinet reachable from the workstation by its network name (DHCP leases
+  move, so the inventory uses names, not IPs), and Internet access during the run (Debian
+  mirrors, GitHub for Homebrew and the MAUI release, Homebrew bottles).
+
+`python3` and `sudo` are missing on a minimal install. The first play installs `python3` and
+`python3-apt` (needed by `--check`) with a raw command, the rest comes from the main play.
+
+## Your cabinets: `inventory/`
+
+The repository ships the playbook and an example; your own cabinets live in `inventory/`,
+which git ignores:
+
+```
+maui-cabinets/
+├── cabinet.yml, templates/
+├── group_vars/             project settings by architecture and hardware (do not edit)
+├── examples/inventory/     the example, copied by `just init`
+└── inventory/              yours, ignored by git
+    ├── inventory.yml
+    ├── host_vars/<host>.yml or host_vars/<host>/{vars,vault}.yml
+    └── .vault-pass         only with vaulted settings
+```
+
+`inventory/` stays on your workstation: back it up, it may hold Wi-Fi keys and enrolment
+tokens. If you want it versioned, make it a private git repository of its own.
+
+Ansible reads `inventory/host_vars/` because it sits next to the inventory file
+(`ansible.cfg`: `inventory = inventory/inventory.yml`). Change a project default, such as
+`kiosk_resolution`, in `inventory/host_vars/`: Ansible gives the project's `group_vars/`
+precedence over an `inventory/group_vars/`, but `host_vars` win over both.
+
+## Deployment procedure
+
+### 1. Prepare the workstation (once)
+
+```bash
+git clone https://github.com/Arcadoolic/maui-cabinets.git
+cd maui-cabinets
+just setup      # .venv/ with Ansible + the collections; run it again after a pull
+just init       # inventory/ from the example
+```
+
+### 2. Install the operating system
+
+Install Debian 13 as described above (hostname e.g. `arcade-pacman`, kiosk account, root
+password, SSH server, no desktop). Note the hostname and the kiosk account's name.
+
+### 3. Give the workstation SSH access
+
+```bash
+ssh-copy-id pacman@arcade-pacman        # or <user>@<hostname>.local over mDNS
+ssh pacman@arcade-pacman true           # must log in without a password prompt
+```
+
+### 4. Find the sound output
+
+Over SSH, list the outputs and keep the card and device of the one wired to the speakers:
+
+```bash
+cat /proc/asound/pcm
+# 00-03: HDMI 0 : HDMI 0 : playback 1   -> card PCH, device 3 (Intel HDMI)
+# 00-00: CX20641 Analog : ...           -> card PCH, device 0 (analog jack)
+# 01-00: MAI PCM i2s-hifi-0 : ...       -> card vc4hdmi, device 0 (Raspberry Pi HDMI)
+ls /proc/asound                         # card names (PCH, vc4hdmi, ...)
+```
+
+### 5. Declare the cabinet
+
+In `inventory/inventory.yml` (created by `just init`), declare the host once in `cabinets` (connection settings), then tag it with
+one group per axis:
+
+| Axis | Groups | What it picks |
+|---|---|---|
+| Architecture (**mandatory**) | `x86_64`, `arm64` | AppImage flavour and its sha256 (`group_vars/<arch>.yml`) |
+| Hardware | `desktop_pc`, `raspberry_pi` | `raspberry_pi`: become with `sudo` instead of `su` |
+| Operating system | `debian_13` | package names |
+
+```yaml
+cabinets:
+  hosts:
+    arcade-pacman: # what the machine is
+      ansible_user: pacman
+x86_64:
+  hosts:
+    arcade-pacman:
+desktop_pc:
+  hosts:
+    arcade-pacman:
+debian_13:
+  hosts:
+    arcade-pacman:
+```
+
+Then create `inventory/host_vars/<name>.yml` (or an `inventory/host_vars/<name>/` directory
+when it has secrets, see [Secrets](#secrets)):
+
+```yaml
+# Account that autologs on tty1 and runs the kiosk session.
+kiosk_user: pacman
+
+# ALSA device of the sound output (step 3).
+alsa_hdmi_card: PCH
+alsa_hdmi_device: 3
+
+# Optional: display mode of the kiosk session (see Screen resolution).
+# kiosk_resolution: "1920x1080"
+```
+
+### 6. Dry run, then real run
+
+```bash
+just check arcade-pacman # dry run (--check --diff), asks for the become password
+just apply arcade-pacman # real run, asks for confirmation, then the become password
+```
+
+On a first dry run, the Homebrew/MAME and Wi-Fi steps are skipped: the tools they rely on are
+not installed yet. The real run takes a while, mostly for Homebrew and MAME (several minutes,
+prebuilt bottles on both architectures). It is safe to run again: every step checks the
+current state first.
+
+### 7. After the first run
+
+The kiosk session restarts at the end of the run and MAUI shows up on the screen, with its
+setup guide. The screen shows the back office address, `http://<address of the cabinet>`.
+Open it from any machine on the network and follow the guide: BO account, MAME path (already
+filled in), MAME plugins, ONLINE configuration, conf pack, starter pack (ROMs).
+
+Then check the sound:
+
+```bash
+aplay /usr/share/sounds/alsa/Front_Center.wav   # sound on the chosen output
+```
+
+Intel HDA sometimes boots with the HDMI output (`IEC958`) muted: `alsamixer -c PCH`, unmute,
+then `su -c "alsactl store"` to keep it.
+
+A rescue console stays on tty2 (Ctrl+Alt+F2) if the kiosk session does not come up.
+
+## Updating MAUI
+
+Once installed, a cabinet updates MAUI from its BO (MAUI > Update); the playbook never replaces
+an existing installation. To make **new** cabinets start on a newer release, change
+`maui_version` in `cabinet.yml` and the two `maui_appimage_sha256` in `group_vars/x86_64.yml`
+and `group_vars/arm64.yml`, with the digests of the release:
+
+```bash
+gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \(.digest)"'
+```
+
+## What depends on the target
+
+| Topic | Raspberry Pi (arm64) | x86_64 PC |
+|---|---|---|
+| MAME | Homebrew, prebuilt `arm64_linux` bottle | Homebrew, prebuilt `x86_64_linux` bottle |
+| AppImage | `-linux-arm64`, sha256 checked | `-linux-x86_64`, sha256 checked |
+| Sound | `hw:vc4hdmi,0` (HDMI) | `hw:PCH,3` (Intel HDMI) or `hw:PCH,0` (jack), set in `host_vars` |
+| GPU | vc4 | Intel, `libgl1-mesa-dri` + `render` group |
+| Root | locked, `sudo` with the kiosk password | `su` with the root password |
+
+## Screen resolution
+
+`.xinitrc` forces the display to `kiosk_resolution` (default `1920x1080`, set in
+`group_vars/all.yml`) with `xrandr` on the first connected output, so a 4K screen does not run
+Electron and MAME at its native 3840x2160. MAME fullscreen follows the desktop mode.
+Override it in `inventory/host_vars/<name>.yml`; an empty string keeps the screen's native
+mode. If the screen does not offer the requested mode, the native one is kept. The tty console
+is not affected. Check the active mode (marked `*`) over SSH with `DISPLAY=:0 xrandr --query`.
+
+## What the playbook leaves alone
+
+- `~/squashfs-root` is extracted only when absent. Later versions are installed from
+  the BO (MAUI > Update), the playbook never replaces them.
+- `~/.mame-awesome-ui/mame-awesome-ui-config.json` is written only when absent, so settings
+  made in the BO survive a re-run.
+
+## Secrets (Ansible Vault)
+
+Passwords and tokens (Wi-Fi key, enrolment tokens) never go in plain text. They live in an
+encrypted file per cabinet, `inventory/host_vars/<name>/vault.yml`, unlocked by one password
+kept in `inventory/.vault-pass`. Only a cabinet that has secrets needs this.
+
+**1. Create the vault password**, once for all your cabinets. Keep a copy of it somewhere
+safe (a password manager): without it the vaults cannot be read back.
+
+```bash
+openssl rand -base64 32 > inventory/.vault-pass
+chmod 600 inventory/.vault-pass
+```
+
+**2. Turn the cabinet's settings file into a directory**: Ansible reads every file of
+`host_vars/<name>/`.
+
+```bash
+mkdir inventory/host_vars/arcade-pacman
+mv inventory/host_vars/arcade-pacman.yml inventory/host_vars/arcade-pacman/vars.yml
+```
+
+**3. Write the secrets in the vault**. `just vault` creates it on first use, then edits it;
+your `$EDITOR` opens the decrypted content and the file is encrypted again on save.
+
+```bash
+just vault arcade-pacman
+```
+
+```yaml
+# inventory/host_vars/arcade-pacman/vault.yml, as shown in the editor
+vault_wifi_psk: "the Wi-Fi key"
+```
+
+**4. Refer to them from `vars.yml`**, by name. Keeping the `vault_` prefix shows where a value
+comes from, and `vars.yml` stays readable without the password.
+
+```yaml
+# inventory/host_vars/arcade-pacman/vars.yml
+wifi_psk: "{{ vault_wifi_psk }}"
+```
+
+`just check` and `just apply` unlock the vaults with `inventory/.vault-pass` when that file
+exists. Other commands, from the virtualenv:
+
+```bash
+.venv/bin/ansible-vault view --vault-password-file inventory/.vault-pass inventory/host_vars/arcade-pacman/vault.yml
+.venv/bin/ansible-vault rekey --vault-password-file inventory/.vault-pass inventory/host_vars/*/vault.yml  # change the password
+```
+
+## Company network (optional)
+
+Two blocks of the playbook only run on the hosts that define their variables:
+
+- `netskope_tenant_host`: installs the Netskope client and enrols the cabinet in the tenant,
+  by email (`netskope_enroll_email`), with three values of the tenant to keep in the vault:
+  `netskope_org_key`, `netskope_enroll_auth_token`, `netskope_enroll_encryption_token`. The installer runs once; the `stagentd` service it sets up
+  starts at every boot. Check with `/opt/netskope/stagent/nsdiag -f`.
+- `wifi_ssid`: declares the Wi-Fi network in NetworkManager on `wifi_interface`, with
+  `wifi_psk` if it has a key. The real MAC address of the interface is always used, for
+  networks that filter on it. The network need not be in range when the playbook runs.
+
+## Back office address
+
+The cabinet's screen shows where its back office is: `http://<address of the cabinet>`, on
+port 80. The playbook lets the kiosk user open that port (`net.ipv4.ip_unprivileged_port_start`
+in `/etc/sysctl.d/`); port 3131 keeps answering as before.

@@ -1,0 +1,7 @@
+# Value of ansible_facts.architecture expected on these hosts.
+expected_architecture: aarch64
+
+# Release asset suffix (mame-awesome-ui-<version>-linux-<arch>.AppImage) and its digest:
+# gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \(.digest)"'
+maui_appimage_arch: arm64
+maui_appimage_sha256: "9c363a2d4db669beeec361b692ccd394c020642cfde93f6097f31fe7beab3f75"

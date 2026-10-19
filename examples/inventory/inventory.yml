@@ -1,0 +1,36 @@
+# Example inventory: copy this directory to inventory/ (`just init`), then declare your own
+# cabinets. inventory/ is ignored by git; it can be a repository of its own.
+#
+# Every cabinet is declared once in `cabinets` (connection settings), then tagged with one
+# group per axis below: architecture, hardware, operating system.
+cabinets:
+  hosts:
+    # Hosts are reached by their local network name, not by IP (DHCP leases move).
+    arcade-pacman: # x86_64 mini PC
+      ansible_user: pacman
+    # arcade-galaga: # Raspberry Pi 4
+    #   # mDNS name: follows whichever interface is up.
+    #   ansible_host: arcade-galaga.local
+    #   ansible_user: galaga
+
+# --- Architecture (AppImage flavour), mandatory --------------------------------------------
+x86_64:
+  hosts:
+    arcade-pacman:
+arm64:
+  hosts:
+    # arcade-galaga:
+
+# --- Hardware (raspberry_pi: root is locked, become with sudo) -----------------------------
+desktop_pc:
+  hosts:
+    arcade-pacman:
+raspberry_pi:
+  hosts:
+    # arcade-galaga:
+
+# --- Operating system (package names) ------------------------------------------------------
+debian_13:
+  hosts:
+    arcade-pacman:
+    # arcade-galaga:

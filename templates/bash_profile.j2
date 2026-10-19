@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+[ -f ~/.profile ] && . ~/.profile
+# Start X only on the autologin console, never from an SSH session.
+if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+    exec startx -- -nocursor
+fi
