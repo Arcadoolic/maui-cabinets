@@ -10,6 +10,7 @@ An Ansible playbook (`cabinet.yml`) that turns a fresh Debian 13 machine (x86_64
 
 ```
 just setup             # .venv/ with requirements.txt (ansible-core) + requirements.yml collections in .ansible/collections
+just add <host>        # guided: SSH key, probe of the machine, writes inventory/inventory.yml + host_vars/<host>.yml
 just init              # create inventory/ from examples/inventory/ (never overwrites it)
 just check <host>      # dry run: ansible-playbook cabinet.yml --limit <host> --ask-become-pass --check --diff
 just apply <host>      # real run, asks for confirmation (changes the system, restarts the kiosk session)
@@ -28,6 +29,7 @@ just vault <host>      # ansible-vault create, then edit, inventory/host_vars/<h
 - `inventory.yml` (in `inventory/` or the example) — each host once under `cabinets` (connection settings, reached by network name, not IP), then one group per axis: architecture (`x86_64` / `arm64`, mandatory), hardware (`desktop_pc` / `raspberry_pi`), OS (`debian_13`).
 - `group_vars/` — `all.yml` (`kiosk_resolution`), `<arch>.yml` (`expected_architecture`, AppImage suffix and sha256), `raspberry_pi.yml` (`ansible_become_method: sudo`, root is locked on Raspberry Pi OS).
 - `host_vars/<host>.yml` or `host_vars/<host>/{vars,vault}.yml` (in `inventory/` or the example) — `kiosk_user`, `alsa_hdmi_card` / `alsa_hdmi_device` (from `/proc/asound/pcm`), optional `kiosk_resolution`, `netskope_*`, `wifi_*`. Vault values are `vault_*` variables referenced from `vars.yml`; the password is in `inventory/.vault-pass`, never committed anywhere.
+- `scripts/add_cabinet.py` — `just add`, for people who do not know Ansible. Runs with the venv's Python (PyYAML from ansible-core, stdlib otherwise). Asks for the address and kiosk account, `ssh-copy-id`, then one read-only SSH probe (`uname -m`, `/etc/os-release`, device-tree model or DMI, `id -nG`, `/proc/asound/{cards,pcm}`). Edits `inventory.yml` as text (`add_to_group`) to keep the user's comments, checks the result with PyYAML and `ansible-inventory --host`, and restores the previous files on failure. It must never change a declared cabinet nor anything on the machine but `authorized_keys`. A new host variable the playbook requires belongs here too (asked or detected).
 - `templates/` — `xinitrc.j2`, `bash_profile.j2`, `getty-autologin.conf.j2`, `asound.conf.j2`, `sudoers-restart-kiosk.j2`, `mame-awesome-ui-config.json.j2`.
 
 ## Rules

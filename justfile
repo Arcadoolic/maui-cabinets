@@ -8,9 +8,19 @@ bin := venv / "bin"
 inventory := "inventory"
 vault_args := if path_exists(inventory / ".vault-pass") == "true" { "--vault-password-file " + inventory / ".vault-pass" } else { "" }
 
-# List available recipes
+# Show the steps of a deployment, then the recipes
 default:
+    @echo "Deploy a MAUI cabinet, step by step (README.md has the details):"
+    @echo "  1. just setup          once: Ansible in .venv/"
+    @echo "  2. just add <host>     declare the cabinet, guided (SSH key, sound output)"
+    @echo "  3. just check <host>   dry run, changes nothing"
+    @echo "  4. just apply <host>   install MAME and MAUI on the cabinet"
+    @echo
     @just --list
+
+# Declare a new cabinet, guided: SSH key, then architecture and sound read from the machine
+add host: _check-venv
+    {{bin}}/python scripts/add_cabinet.py {{host}} --inventory {{inventory}} --ansible-bin {{bin}}
 
 # Create the virtualenv with Ansible and the collections it needs (safe to run again)
 setup:

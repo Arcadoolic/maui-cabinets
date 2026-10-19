@@ -17,7 +17,7 @@ New cabinets get **MAUI 2.16.1** (`maui_version` in `cabinet.yml`).
   (`sudo apt install python3-venv` on Debian and Ubuntu).
 - [just](https://github.com/casey/just), to run the recipes of the `justfile`
   (`sudo apt install just`, `brew install just`).
-- An SSH key (`ssh-keygen -t ed25519` if you have none).
+- An SSH key (`just add` offers to create one if you have none).
 
 Ansible itself is not needed: `just setup` installs the pinned version (`requirements.txt`) and
 its collections (`requirements.yml`) in the project, in `.venv/` and `.ansible/collections/`,
@@ -36,8 +36,9 @@ both ignored by git. The recipes always use that copy, never a system-wide Ansib
   - the kiosk account (e.g. `pacman`), created by the installer. It autologs on the screen and
     runs MAUI. Its name is `kiosk_user` and must be the SSH user (`ansible_user`).
   - a root password, set in the installer. The kiosk account gets no general sudo rights, so
-    Ansible becomes root with `su` and asks for that password on every run. Do not leave it
-    empty: the Debian installer then locks root and `su` cannot work.
+    Ansible becomes root with `su` and asks for that password on every run. Better not leave
+    it empty: the Debian installer then locks root, and the cabinet has to use `sudo` with the
+    kiosk account's password instead (`just add` detects it and sets it up).
     Exception: on Raspberry Pi OS root is locked, so the `raspberry_pi` group uses `sudo` and the
     password asked is the kiosk account's own.
 - **Network**: the cabinet reachable from the workstation by its network name (DHCP leases
@@ -57,7 +58,7 @@ maui-cabinets/
 ├── cabinet.yml, templates/
 ├── group_vars/             project settings by architecture and hardware (do not edit)
 ├── examples/inventory/     the example, copied by `just init`
-└── inventory/              yours, ignored by git
+└── inventory/              yours (just add, or just init), ignored by git
     ├── inventory.yml
     ├── host_vars/<host>.yml or host_vars/<host>/{vars,vault}.yml
     └── .vault-pass         only with vaulted settings
@@ -79,24 +80,50 @@ precedence over an `inventory/group_vars/`, but `host_vars` win over both.
 git clone https://github.com/Arcadoolic/maui-cabinets.git
 cd maui-cabinets
 just setup      # .venv/ with Ansible + the collections; run it again after a pull
-just init       # inventory/ from the example
 ```
+
+`just` alone prints these steps.
 
 ### 2. Install the operating system
 
 Install Debian 13 as described above (hostname e.g. `arcade-pacman`, kiosk account, root
-password, SSH server, no desktop). Note the hostname and the kiosk account's name.
+password, SSH server, no desktop). Note the hostname and the kiosk account's name. Plug in the
+screen and the speakers.
 
-### 3. Give the workstation SSH access
+### 3. Declare the cabinet: `just add`
+
+```bash
+just add arcade-pacman
+```
+
+The recipe guides you through it, no Ansible knowledge needed:
+
+1. it asks for the machine's network address (the hostname, `<hostname>.local` or an IP) and
+   the kiosk account;
+2. it copies your SSH key to the machine (asking for the account's password once), creating a
+   key first if you have none;
+3. it reads the rest from the machine: architecture, Raspberry Pi or PC, Debian version (and
+   stops if it is not 13), whether root has a password;
+4. it lists the sound outputs and asks which one the speakers are on;
+5. it writes the cabinet into `inventory/inventory.yml` and `inventory/host_vars/<name>.yml`,
+   checks that Ansible reads them back, and prints the next commands.
+
+It only adds the SSH key on the machine, and never changes a cabinet already declared.
+
+#### By hand
+
+What `just add` writes, if you prefer to do it yourself. Start from the example with
+`just init`, which copies `examples/inventory/` to `inventory/`.
+
+Give the workstation SSH access:
 
 ```bash
 ssh-copy-id pacman@arcade-pacman        # or <user>@<hostname>.local over mDNS
 ssh pacman@arcade-pacman true           # must log in without a password prompt
 ```
 
-### 4. Find the sound output
-
-Over SSH, list the outputs and keep the card and device of the one wired to the speakers:
+Find the sound output: over SSH, list the outputs and keep the card and device of the one
+wired to the speakers:
 
 ```bash
 cat /proc/asound/pcm
@@ -106,10 +133,8 @@ cat /proc/asound/pcm
 ls /proc/asound                         # card names (PCH, vc4hdmi, ...)
 ```
 
-### 5. Declare the cabinet
-
-In `inventory/inventory.yml` (created by `just init`), declare the host once in `cabinets` (connection settings), then tag it with
-one group per axis:
+In `inventory/inventory.yml`, declare the host once in `cabinets` (connection settings), then
+tag it with one group per axis:
 
 | Axis | Groups | What it picks |
 |---|---|---|
@@ -134,21 +159,24 @@ debian_13:
 ```
 
 Then create `inventory/host_vars/<name>.yml` (or an `inventory/host_vars/<name>/` directory
-when it has secrets, see [Secrets](#secrets)):
+when it has secrets, see [Secrets](#secrets-ansible-vault)):
 
 ```yaml
 # Account that autologs on tty1 and runs the kiosk session.
 kiosk_user: pacman
 
-# ALSA device of the sound output (step 3).
+# ALSA device of the sound output (cat /proc/asound/pcm).
 alsa_hdmi_card: PCH
 alsa_hdmi_device: 3
 
 # Optional: display mode of the kiosk session (see Screen resolution).
 # kiosk_resolution: "1920x1080"
+
+# Only on a PC whose root has no password (left empty at install): become with sudo.
+# ansible_become_method: sudo
 ```
 
-### 6. Dry run, then real run
+### 4. Dry run, then real run
 
 ```bash
 just check arcade-pacman # dry run (--check --diff), asks for the become password
@@ -160,7 +188,7 @@ not installed yet. The real run takes a while, mostly for Homebrew and MAME (sev
 prebuilt bottles on both architectures). It is safe to run again: every step checks the
 current state first.
 
-### 7. After the first run
+### 5. After the first run
 
 The kiosk session restarts at the end of the run and MAUI shows up on the screen, with its
 setup guide. The screen shows the back office address, `http://<address of the cabinet>`.

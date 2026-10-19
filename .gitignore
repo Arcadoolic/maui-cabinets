@@ -5,3 +5,4 @@
 # Virtualenv and collections of just setup
 /.venv/
 /.ansible/
+__pycache__/
