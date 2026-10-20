@@ -6,3 +6,6 @@
 /.venv/
 /.ansible/
 __pycache__/
+# MAME packages (just fetch-mame / just build-mame) and ISOs (just iso)
+/files/
+/build/

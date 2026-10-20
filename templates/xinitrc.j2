@@ -4,14 +4,56 @@
 xset -dpms
 xset s off
 xset s noblank
+# Light up the first connected output (name differs between the Pi and Intel){% if kiosk_resolution %}, capped at
+# {{ kiosk_resolution }}: keeps the native mode if the screen does not offer this one{% endif %}.
+screen_on() {
+  output=$(xrandr --query | awk '/ connected/ {print $1; exit}')
+  [ -n "$output" ] || return 0
 {% if kiosk_resolution %}
-# Cap the display at {{ kiosk_resolution }} on the first connected output (name differs between
-# the Pi and Intel). Keeps the native mode if the screen does not offer this one.
-output=$(xrandr --query | awk '/ connected/ {print $1; exit}')
-[ -n "$output" ] && xrandr --output "$output" --mode {{ kiosk_resolution }} || true
+  xrandr --output "$output" --mode {{ kiosk_resolution }} 2>/dev/null || xrandr --output "$output" --auto
+{% else %}
+  xrandr --output "$output" --auto
 {% endif %}
+{% if alsa_follow_screen %}
+  sound_follows_screen
+{% endif %}
+}
+{% if alsa_follow_screen %}
+# The HDMI port of /etc/asound.conf is the one a screen was on at install time; a screen not
+# yet detected then (seen on a Minisforum, Intel LPE audio) leaves the sound on a dead port.
+# Intel's jack controls say which HDMI PCM a screen listens on now: ~/.asoundrc (read after
+# /etc/asound.conf, its pcm.!default wins) points there for MAME and MAUI. Only when the
+# configured output is itself HDMI: speakers on the analog jack stay there. No jack on:
+# /etc/asound.conf applies. alsa_follow_screen: false in host_vars turns this off.
+sound_follows_screen() {
+  rc=$HOME/.asoundrc
+  marker='# Written by ~/.xinitrc (maui-cabinets): sound on the HDMI port of the screen.'
+  [ -e "$rc" ] && ! grep -qxF "$marker" "$rc" && return 0
+  card=$(readlink /proc/asound/{{ alsa_hdmi_card }}) || return 0
+  grep -i "^$(printf %02d-%02d "${card#card}" {{ alsa_hdmi_device }}):.*hdmi" /proc/asound/pcm > /dev/null || return 0
+  for pcm in $(awk -F'[-:]' 'tolower($0) ~ /hdmi/ && /playback/ {print ($1 + 0) "," ($2 + 0)}' /proc/asound/pcm); do
+    num=${pcm%,*} dev=${pcm#*,}
+    amixer -c "$num" cget "iface=CARD,name='HDMI/DP,pcm=$dev Jack'" 2> /dev/null | grep -q ': values=on' || continue
+    id=$(cat "/proc/asound/card$num/id")
+    printf '%s\npcm.!default {\n    type plug\n    slave.pcm "hw:%s,%s"\n}\nctl.!default {\n    type hw\n    card %s\n}\n' \
+      "$marker" "$id" "$dev" "$id" > "$rc"
+    return 0
+  done
+  rm -f "$rc"
+}
+{% endif %}
+screen_on
+# A screen switched on after X started (seen on a Minisforum) stays dark: X does not light
+# up a hot-plugged output by itself. The kernel's connector state is cheap to read, so watch
+# it and only call xrandr when a screen is connected but none shows a picture.
+(
+  while sleep 3; do
+    grep -qx enabled /sys/class/drm/card*-*/enabled 2>/dev/null && continue
+    grep -qx connected /sys/class/drm/card*-*/status 2>/dev/null && screen_on
+  done
+) &
 matchbox-window-manager -use_titlebar no &
-# Homebrew's MAME (SDL3) can deadlock on exit through PulseAudio: force ALSA
+# MAME can deadlock on exit through PulseAudio (seen with Homebrew's SDL3 build): force ALSA
 # (maui: docs/RASPBERRY-PI-DEPLOY.md §6.4).
 export SDL_AUDIO_DRIVER=alsa
 # Node only trusts its bundled certificate authorities: add the system's, where a company

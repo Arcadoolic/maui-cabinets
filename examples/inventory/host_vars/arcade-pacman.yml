@@ -10,6 +10,9 @@ kiosk_user: pacman
 #   "01-00: MAI PCM i2s-hifi-0" -> card vc4hdmi, device 0 (Raspberry Pi HDMI)
 alsa_hdmi_card: PCH
 alsa_hdmi_device: 3
+# The session moves the sound to the HDMI port the screen is on when it differs (Intel only,
+# default in group_vars/all.yml). false keeps the output above.
+# alsa_follow_screen: true
 
 # Display mode of the kiosk session (WIDTHxHEIGHT), default in group_vars/all.yml.
 # An empty string keeps the screen's native mode.

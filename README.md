@@ -43,7 +43,7 @@ both ignored by git. The recipes always use that copy, never a system-wide Ansib
     password asked is the kiosk account's own.
 - **Network**: the cabinet reachable from the workstation by its network name (DHCP leases
   move, so the inventory uses names, not IPs), and Internet access during the run (Debian
-  mirrors, GitHub for Homebrew and the MAUI release, Homebrew bottles).
+  mirrors for the MAME dependencies, GitHub for the MAUI release).
 
 `python3` and `sudo` are missing on a minimal install. The first play installs `python3` and
 `python3-apt` (needed by `--check`) with a raw command, the rest comes from the main play.
@@ -79,8 +79,13 @@ precedence over an `inventory/group_vars/`, but `host_vars` win over both.
 ```bash
 git clone https://github.com/Arcadoolic/maui-cabinets.git
 cd maui-cabinets
-just setup      # .venv/ with Ansible + the collections; run it again after a pull
+just setup      # .venv/ with Ansible + the collections, MAME packages in files/; run it again after a pull
 ```
+
+`just setup` ends with `just fetch-mame`: it downloads the MAME packages from the
+`mame-<version>` release of this repository into `files/` (git-ignored, about 100 MB per
+architecture) with the [GitHub CLI](https://cli.github.com) (`gh auth login` first), and checks
+their sha256. See [MAME packages](#mame-packages).
 
 `just` alone prints these steps.
 
@@ -183,10 +188,10 @@ just check arcade-pacman # dry run (--check --diff), asks for the become passwor
 just apply arcade-pacman # real run, asks for confirmation, then the become password
 ```
 
-On a first dry run, the Homebrew/MAME and Wi-Fi steps are skipped: the tools they rely on are
-not installed yet. The real run takes a while, mostly for Homebrew and MAME (several minutes,
-prebuilt bottles on both architectures). It is safe to run again: every step checks the
-current state first.
+On a first dry run, the MAME and Wi-Fi steps are skipped: the packages and tools they rely on
+are not on the cabinet yet. The real run takes a few minutes: MAME is copied from `files/`, its
+dependencies (SDL2, Qt...) come from the Debian mirror. It is safe to run again: every step
+checks the current state first.
 
 ### 5. After the first run
 
@@ -201,10 +206,65 @@ Then check the sound:
 aplay /usr/share/sounds/alsa/Front_Center.wav   # sound on the chosen output
 ```
 
+On Intel, when the output set in `host_vars` is an HDMI port, each kiosk session moves the
+sound to the HDMI port a screen is plugged in (`~/.asoundrc`, written by `~/.xinitrc`); with no
+screen detected `/etc/asound.conf` applies. `alsa_follow_screen: false` in `host_vars` keeps
+the configured output, e.g. speakers on another HDMI port than the screen.
+
+A screen switched on after the kiosk session started gets its picture within 3 seconds:
+`~/.xinitrc` watches the outputs and lights up a connected one when none is.
+
 Intel HDA sometimes boots with the HDMI output (`IEC958`) muted: `alsamixer -c PCH`, unmute,
 then `su -c "alsactl store"` to keep it.
 
 A rescue console stays on tty2 (Ctrl+Alt+F2) if the kiosk session does not come up.
+
+## Without a workstation: the installation ISO (`just iso`, x86_64 PC only)
+
+`just iso` turns the Debian 13 netinst ISO into a USB installer that does steps 2 to 4 by
+itself: it installs Debian with no questions, then the first boot runs `cabinet.yml` on the
+cabinet itself. Needs `podman` or `docker` (the build runs in a `debian:trixie` container) and
+the x86_64 MAME packages in `files/` (`just fetch-mame`).
+
+```bash
+just iso                        # asks for the root and kiosk passwords
+just iso --hostname arcade-pacman --sound PCH,3
+just iso --help                 # every option
+```
+
+By default it takes the newest `debian-13.*-amd64-netinst.iso` of your Downloads folder and
+writes `build/maui-cabinet-<MAUI version>-<Debian ISO name>` (git-ignored). The ISO holds:
+
+- `preseed.cfg` (from `iso/preseed.cfg.in`): language `fr_FR.UTF-8`, keyboard `fr`, time zone
+  `Europe/Paris` (`--locale`, `--keymap`, `--timezone`), wired DHCP, the root password and the
+  kiosk account `pacman` (`--user`) without sudo, SSH server, no desktop. Only the passwords'
+  SHA-512 hashes are stored, still: keep the ISO to yourself.
+- every `.deb` the playbook installs: the MAME packages and all the packages apt would
+  download for them and for the playbook (X, Qt, SDL2, Mesa...), about 360 packages and 300 MB,
+  as a local apt repository. The ISO weighs about 1.1 GB, and the cabinet downloads no `.deb`.
+- the playbook, without any inventory, and your SSH public key (`~/.ssh/id_ed25519.pub` by
+  default, `--ssh-key FILE`, `--no-ssh-key`), so `just add` can reach the cabinet afterwards.
+
+Write the ISO as is to a USB stick or SD card (`dd`, Raspberry Pi Imager, balenaEtcher), plug
+the cabinet into Ethernet, the screen and the speakers, and boot on the stick. Choose
+**MAUI cabinet - ERASES the internal disk**: the menu waits for that key press, so a cabinet
+that boots on the stick again never reinstalls itself.
+
+- **Disk**: the first internal disk is wiped without asking (`iso/pick-disk.sh`): never the
+  stick itself nor a removable disk. With no candidate the installer asks.
+- **Name**: `arcade-<last 4 hex digits of the wired MAC address>` (`--hostname` to fix it), so
+  one ISO serves every cabinet. It answers as `<name>.local` (avahi).
+- **First boot** (`maui-firstboot.service`, `iso/maui-firstboot.sh`, about a minute): shown
+  on tty8 and logged in `/var/log/maui-firstboot.log`. It still needs the Internet for the MAUI
+  AppImage (GitHub), Ansible (PyPI) and its collection (Galaxy). It installs the pinned Ansible in
+  `/opt/maui-cabinets/.venv`, picks the sound output (the HDMI port a screen is plugged in,
+  else the first output, then followed by each session; `--sound CARD,DEVICE` to force it), writes the one-cabinet inventory
+  `/opt/maui-cabinets/inventory/`, then runs `cabinet.yml` locally as the kiosk account, with a
+  temporary sudo rule removed at the end, as is the ISO's apt repository (later upgrades come
+  from the mirror). On failure (no Internet...) it runs again at the
+  next boot, or with `systemctl start maui-firstboot`. Then MAUI shows its setup guide (step 5).
+
+Later runs go through the workstation as usual: `just add <name>`, `just apply <name>`.
 
 ## Updating MAUI
 
@@ -221,11 +281,34 @@ gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \
 
 | Topic | Raspberry Pi (arm64) | x86_64 PC |
 |---|---|---|
-| MAME | Homebrew, prebuilt `arm64_linux` bottle | Homebrew, prebuilt `x86_64_linux` bottle |
+| MAME | `mame_0.289-1_arm64.deb` (upstream build) | `mame` + `mame-data` 0.289 (Debian sid, rebuilt for trixie) |
 | AppImage | `-linux-arm64`, sha256 checked | `-linux-x86_64`, sha256 checked |
 | Sound | `hw:vc4hdmi,0` (HDMI) | `hw:PCH,3` (Intel HDMI) or `hw:PCH,0` (jack), set in `host_vars` |
 | GPU | vc4 | Intel, `libgl1-mesa-dri` + `render` group |
 | Root | locked, `sudo` with the kiosk password | `su` with the root password |
+
+## MAME packages
+
+MAME is installed from `.deb` packages, listed per architecture with their sha256 in
+`mame_debs` (`group_vars/x86_64.yml`, `group_vars/arm64.yml`): `/usr/games/mame`, plugins in
+`/usr/share/games/mame/plugins`, the user's MAME folder `~/.mame`. ROMs, samples and artwork go to
+`~/mame/roms`, `~/mame/samples`... (created by the playbook: they come first in Debian's `mame.ini`,
+before folders of `/usr/local` and `/usr/share` that the kiosk user cannot write). Debian 13 only ships MAME
+0.276, so:
+
+- **x86_64**: Debian sid's `mame` and `mame-data` source, rebuilt on Debian 13 with
+  `just build-mame` (about 20 minutes on 16 cores, in a `debian:trixie` container). The binary of sid itself
+  cannot be used: it needs sid's libc6 and Qt, and would pull 300 packages from sid.
+- **arm64**: an upstream `mame0289` build in a single package with the same layout.
+
+A new MAME version: build the packages, publish them as a `mame-<version>` release
+(`gh release create mame-<version> files/<packages>`), then update `mame_release`
+(`group_vars/all.yml`) and `mame_debs` (file names and `sha256sum`).
+
+Cabinets installed with Homebrew before keep it: their MAUI config still points at the
+Homebrew MAME (the playbook never overwrites it). To switch, set the MAME folder to
+`/usr/games` and the plugins folder to `/usr/share/games/mame/plugins` in the BO (MAME tab);
+`/home/linuxbrew` can then be removed.
 
 ## Screen resolution
 

@@ -33,20 +33,11 @@
     maui_appimage: "mame-awesome-ui-{{ maui_version }}-linux-{{ maui_appimage_arch }}.AppImage"
     maui_appimage_url: "https://github.com/Arcadoolic/maui/releases/download/{{ maui_version }}/{{ maui_appimage }}"
     kiosk_home: "/home/{{ kiosk_user }}"
-    homebrew_prefix: /home/linuxbrew/.linuxbrew
-    homebrew_env:
-      HOMEBREW_NO_ANALYTICS: "1"
-      HOMEBREW_NO_ENV_HINTS: "1"
-      NONINTERACTIVE: "1"
-      PATH: "{{ homebrew_prefix }}/bin:{{ homebrew_prefix }}/sbin:/usr/local/bin:/usr/bin:/bin"
+    # mame_debs (the MAME packages, in install order) comes from group_vars/<architecture>.yml;
+    # just setup downloads them into files/ from the mame_release of this repository.
+    mame_deb_cache: /var/cache/maui-cabinets
 
     system_packages:
-      # Homebrew prerequisites
-      - build-essential
-      - procps
-      - curl
-      - file
-      - git
       # AppImage runtime: unversioned libz.so for the squashfs, FUSE2 ABI
       - zlib1g-dev
       - libfuse2t64
@@ -137,6 +128,29 @@
         that: hdmi_card.stat.exists
         fail_msg: "No ALSA card '{{ alsa_hdmi_card }}' on this host, check alsa_hdmi_card (cat /proc/asound/pcm)."
 
+    # The packages are too big for git: just setup downloads them into files/.
+    - name: Read the MAME packages of files/
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/files/{{ item.file }}"
+        checksum_algorithm: sha256
+      loop: "{{ mame_debs }}"
+      loop_control:
+        label: "{{ item.file }}"
+      register: mame_deb_files
+      delegate_to: localhost
+      become: false
+
+    - name: Refuse a missing or damaged MAME package
+      ansible.builtin.assert:
+        that: item.stat.exists and item.stat.checksum == item.item.sha256
+        fail_msg: >-
+          files/{{ item.item.file }} is {{ 'damaged (wrong sha256)' if item.stat.exists else 'missing' }}:
+          run just setup, which downloads it from the {{ mame_release }} release.
+        quiet: true
+      loop: "{{ mame_deb_files.results }}"
+      loop_control:
+        label: "{{ item.item.file }}"
+
   tasks:
     # --- System packages -------------------------------------------------------------------
     - name: Install system packages
@@ -152,54 +166,96 @@
         groups: [video, render, audio]
         append: true
 
-    # --- Homebrew + MAME (bottles exist for x86_64_linux and arm64_linux) -------------------
-    - name: Create the Homebrew prefix, owned by the kiosk user
+    # --- MAME (packages of files/, see group_vars/<architecture>.yml) ---------------------
+    # Packages kept in the cache folder: apt installs the dependencies they declare from the
+    # Debian mirror (SDL2, Qt...), and a later run with the same files changes nothing.
+    - name: Create the MAME package folder
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ mame_deb_cache }}"
         state: directory
-        owner: "{{ kiosk_user }}"
-        group: "{{ kiosk_user }}"
+        owner: root
+        group: root
         mode: "0755"
-      loop:
-        - /home/linuxbrew
-        - "{{ homebrew_prefix }}"
-        - "{{ homebrew_prefix }}/bin"
 
-    - name: Check whether Homebrew is already installed
-      ansible.builtin.stat:
-        path: "{{ homebrew_prefix }}/bin/brew"
-      register: homebrew_brew
+    - name: Copy the MAME packages
+      ansible.builtin.copy:
+        src: "files/{{ item.file }}"
+        dest: "{{ mame_deb_cache }}/{{ item.file }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ mame_debs }}"
+      loop_control:
+        label: "{{ item.file }}"
+      register: mame_deb_copy
 
-    # A first --check run cannot preview this: git and the Homebrew checkout do not exist yet
-    # (apt only pretended to install them). Skipped in that case, always run for real.
-    - name: Install Homebrew and MAME
+    # In list order: on x86_64, mame depends on the exact mame-data version, installed first.
+    # A first --check run only pretends to copy the packages: nothing to install from yet.
+    - name: Install MAME and its dependencies
+      ansible.builtin.apt:
+        deb: "{{ mame_deb_cache }}/{{ item.file }}"
+      loop: "{{ mame_debs }}"
+      loop_control:
+        label: "{{ item.file }}"
+      when: not (ansible_check_mode and mame_deb_copy.changed)
+
+    # Debian's mame.ini (copied to ~/.mame by /usr/games/mame) lists $HOME/mame/<kind> first,
+    # then folders of /usr/local/share and /usr/share that root owns. MAUI imports a starter pack
+    # into the first one that exists: without these, the ROMs go to /usr/local (EACCES).
+    - name: Create the kiosk user's MAME folders (first in Debian's rompath, samplepath...)
       become: false
-      when: not ansible_check_mode or homebrew_brew.stat.exists
-      block:
-        - name: Clone Homebrew (git, no curl | bash)
-          ansible.builtin.git:
-            repo: https://github.com/Homebrew/brew
-            dest: "{{ homebrew_prefix }}/Homebrew"
-            update: false
+      ansible.builtin.file:
+        path: "{{ kiosk_home }}/mame/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [roms, samples, artwork, crosshair, cheat]
 
-        - name: Link the brew executable
-          ansible.builtin.file:
-            src: ../Homebrew/bin/brew
-            dest: "{{ homebrew_prefix }}/bin/brew"
-            state: link
+    # MAME 0.289's sdl sound module maps a game's speakers to SDL's default device only, and
+    # SDL2's ALSA backend has none (SDL_GetDefaultAudioInfo fails): every game is silent and
+    # its cfg keeps an empty <sound_map>. mame_sound (group_vars/<arch>.yml) picks another
+    # module. mame.ini is MAUI's (BO settings) and written by its -createconfig, which keeps the
+    # values of an existing file: create it first, as /usr/games/mame would, and only ever
+    # replace `sound auto`, never a module chosen later. A --check run may lack MAME or the file.
+    - name: Create the kiosk user's MAME home
+      become: false
+      ansible.builtin.file:
+        path: "{{ kiosk_home }}/.mame"
+        state: directory
+        mode: "0775"
+      register: mame_home_created
+      when: mame_sound | length > 0
 
-        - name: Load Homebrew in interactive shells
-          ansible.builtin.lineinfile:
-            path: "{{ kiosk_home }}/.bashrc"
-            line: 'eval "$({{ homebrew_prefix }}/bin/brew shellenv bash)"'
+    - name: Create the kiosk user's mame.ini from Debian's default
+      become: false
+      ansible.builtin.copy:
+        src: /usr/lib/mame/mame.ini.default
+        remote_src: true
+        dest: "{{ kiosk_home }}/.mame/mame.ini"
+        force: false
+        mode: "0644"
+      register: mame_ini_created
+      when: >-
+        mame_sound | length > 0 and not (ansible_check_mode and
+        (mame_deb_copy.changed or mame_home_created is changed))
 
-        - name: Install MAME from Homebrew (prebuilt bottle, still several minutes)
-          ansible.builtin.command:
-            cmd: "{{ homebrew_prefix }}/bin/brew install mame"
-            creates: "{{ homebrew_prefix }}/opt/mame/bin/mame"
-          environment: "{{ homebrew_env }}"
-          async: 3600
-          poll: 30
+    # Debian's default has no sound line: MAME reads the missing ones as their defaults.
+    - name: Set MAME's sound module in a new mame.ini
+      become: false
+      ansible.builtin.lineinfile:
+        path: "{{ kiosk_home }}/.mame/mame.ini"
+        regexp: '^sound\s'
+        line: "sound                     {{ mame_sound }}"
+      when: mame_ini_created is changed and not ansible_check_mode
+
+    - name: Replace MAME's sound auto in an existing mame.ini
+      become: false
+      ansible.builtin.replace:
+        path: "{{ kiosk_home }}/.mame/mame.ini"
+        regexp: '^sound(\s+)auto\s*$'
+        replace: 'sound\g<1>{{ mame_sound }}'
+      when: >-
+        mame_sound | length > 0 and not (ansible_check_mode and
+        (mame_deb_copy.changed or mame_home_created is changed or mame_ini_created is changed))
 
     # --- MAUI ------------------------------------------------------------------------------
     - name: Create the MAUI config directory

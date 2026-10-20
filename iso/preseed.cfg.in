@@ -1,0 +1,74 @@
+#_preseed_V1
+# Answers of the Debian 13 installer for a MAUI cabinet, read from the ISO built by
+# `just iso` (scripts/build_iso.sh fills the @...@ values). Same target as the README's
+# prerequisites: no desktop, SSH server, root password, the kiosk account. MAME and MAUI come
+# at the first boot, from cabinet.yml (iso/maui-firstboot.sh).
+
+# --- Language, keyboard, clock ----------------------------------------------------------------
+d-i debian-installer/locale string @LOCALE@
+d-i keyboard-configuration/xkb-keymap select @KEYMAP@
+d-i time/zone string @TIMEZONE@
+d-i clock-setup/utc boolean true
+d-i clock-setup/ntp boolean true
+
+# --- Network: wired, DHCP (MAME and MAUI are downloaded at the first boot) ---------------------
+d-i netcfg/choose_interface select auto
+# Temporary name: iso/late-install.sh renames the machine (arcade-<end of its MAC address>
+# unless the ISO was built with --hostname).
+d-i netcfg/get_hostname string arcade
+d-i netcfg/hostname string arcade
+d-i netcfg/get_domain string
+d-i netcfg/wireless_wep string
+d-i hw-detect/load_firmware boolean true
+
+# --- Debian mirror ----------------------------------------------------------------------------
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+d-i apt-setup/non-free-firmware boolean true
+d-i apt-setup/services-select multiselect security, updates
+# Packages come from the mirror: no cdrom line in sources.list, never a "insert the disc" prompt.
+d-i apt-setup/disable-cdrom-entries boolean true
+
+# --- Accounts: root password (become is su, ansible.cfg), kiosk account without sudo -----------
+d-i passwd/root-login boolean true
+d-i passwd/root-password-crypted password @ROOT_PASSWORD_HASH@
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string MAUI kiosk
+d-i passwd/username string @KIOSK_USER@
+d-i passwd/user-password-crypted password @KIOSK_PASSWORD_HASH@
+
+# --- Disk: the whole first internal disk, wiped without asking ---------------------------------
+# iso/pick-disk.sh chooses it (never the USB stick the installer runs from) and tells GRUB.
+d-i partman/early_command string sh /cdrom/maui/pick-disk.sh
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-efi/non_efi_system boolean true
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i partman/mount_style select uuid
+
+# --- Packages ---------------------------------------------------------------------------------
+tasksel tasksel/first multiselect standard, ssh-server
+# For iso/maui-firstboot.sh: the Ansible virtualenv (python3-venv, git, curl), the temporary
+# sudo rule it runs the playbook with, and amixer to find the HDMI port a screen is plugged
+# in. avahi: the cabinet answers as <hostname>.local, the name shown at the end of the install.
+d-i pkgsel/include string sudo python3 python3-venv python3-apt git curl ca-certificates alsa-utils kbd avahi-daemon libnss-mdns
+d-i pkgsel/upgrade select full-upgrade
+popularity-contest popularity-contest/participate boolean false
+
+# --- Boot loader ------------------------------------------------------------------------------
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean false
+
+# --- End: copy the playbook and the first boot service, then reboot ---------------------------
+d-i preseed/late_command string sh /cdrom/maui/late-install.sh
+d-i cdrom-detect/eject boolean true
+d-i finish-install/reboot_in_progress note

@@ -5,3 +5,13 @@ expected_architecture: aarch64
 # gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \(.digest)"'
 maui_appimage_arch: arm64
 maui_appimage_sha256: "9c363a2d4db669beeec361b692ccd394c020642cfde93f6097f31fe7beab3f75"
+
+# MAME packages, in install order (files/, from the mame_release; sha256sum files/<file>).
+# Upstream mame0289 built for arm64 into one package laid out like Debian's mame + mame-data.
+mame_debs:
+  - file: mame_0.289-1_arm64.deb
+    sha256: "ed148e0798a41de642b5b484f594361c4c1afa2f83b4ad23bdd6aff373330f27"
+
+# MAME sound module written into the kiosk user's mame.ini (cabinet.yml); empty keeps MAME's
+# auto. Not checked yet with this package's SDL (x86_64 needs portaudio).
+mame_sound: ""

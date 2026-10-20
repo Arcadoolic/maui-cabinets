@@ -1,0 +1,19 @@
+# Installed by iso/late-install.sh: sets the cabinet up at its first boot (iso/maui-firstboot.sh).
+[Unit]
+Description=MAUI cabinet setup (cabinet.yml, first boot)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/maui-cabinets/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/opt/maui-cabinets/iso/maui-firstboot.sh
+# The AppImage, the MAME dependencies and Ansible take a while on a slow line.
+TimeoutStartSec=infinity
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty8
+TTYReset=yes
+
+[Install]
+WantedBy=multi-user.target
