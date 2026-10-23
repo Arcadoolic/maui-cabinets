@@ -171,95 +171,109 @@
         append: true
 
     # --- MAME (packages of files/, see group_vars/<architecture>.yml) ---------------------
-    # Packages kept in the cache folder: apt installs the dependencies they declare from the
-    # Debian mirror (SDL2, Qt...), and a later run with the same files changes nothing.
-    - name: Create the MAME package folder
-      ansible.builtin.file:
-        path: "{{ mame_deb_cache }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+    # A cabinet set up by an older version of this playbook runs MAME from Homebrew, and MAUI's
+    # mamePath points there: keep it, the Debian packages would only sit beside it unused.
+    - name: Look for a Homebrew MAME
+      ansible.builtin.stat:
+        path: /home/linuxbrew/.linuxbrew/bin/mame
+      register: homebrew_mame
 
-    - name: Copy the MAME packages
-      ansible.builtin.copy:
-        src: "files/{{ item.file }}"
-        dest: "{{ mame_deb_cache }}/{{ item.file }}"
-        owner: root
-        group: root
-        mode: "0644"
-      loop: "{{ mame_debs }}"
-      loop_control:
-        label: "{{ item.file }}"
-      register: mame_deb_copy
+    - name: Install MAME from the Debian packages
+      when: not homebrew_mame.stat.exists
+      block:
+        # Packages kept in the cache folder: apt installs the dependencies they declare from
+        # the Debian mirror (SDL2, Qt...), and a later run with the same files changes nothing.
+        - name: Create the MAME package folder
+          ansible.builtin.file:
+            path: "{{ mame_deb_cache }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
 
-    # In list order: on x86_64, mame depends on the exact mame-data version, installed first.
-    # A first --check run only pretends to copy the packages: nothing to install from yet.
-    - name: Install MAME and its dependencies
-      ansible.builtin.apt:
-        deb: "{{ mame_deb_cache }}/{{ item.file }}"
-      loop: "{{ mame_debs }}"
-      loop_control:
-        label: "{{ item.file }}"
-      when: not (ansible_check_mode and mame_deb_copy.changed)
+        - name: Copy the MAME packages
+          ansible.builtin.copy:
+            src: "files/{{ item.file }}"
+            dest: "{{ mame_deb_cache }}/{{ item.file }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop: "{{ mame_debs }}"
+          loop_control:
+            label: "{{ item.file }}"
+          register: mame_deb_copy
 
-    # Debian's mame.ini (copied to ~/.mame by /usr/games/mame) lists $HOME/mame/<kind> first,
-    # then folders of /usr/local/share and /usr/share that root owns. MAUI imports a starter pack
-    # into the first one that exists: without these, the ROMs go to /usr/local (EACCES).
-    - name: Create the kiosk user's MAME folders (first in Debian's rompath, samplepath...)
-      become: false
-      ansible.builtin.file:
-        path: "{{ kiosk_home }}/mame/{{ item }}"
-        state: directory
-        mode: "0755"
-      loop: [roms, samples, artwork, crosshair, cheat]
+        # In list order: on x86_64, mame depends on the exact mame-data version, installed first.
+        # A first --check run only pretends to copy the packages: nothing to install from yet.
+        - name: Install MAME and its dependencies
+          ansible.builtin.apt:
+            deb: "{{ mame_deb_cache }}/{{ item.file }}"
+          # dpkg looks for ldconfig and start-stop-daemon in the PATH: root reached with su has
+          # no sbin folder in it.
+          environment:
+            PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          loop: "{{ mame_debs }}"
+          loop_control:
+            label: "{{ item.file }}"
+          when: not (ansible_check_mode and mame_deb_copy.changed)
 
-    # MAME 0.289's sdl sound module maps a game's speakers to SDL's default device only, and
-    # SDL2's ALSA backend has none (SDL_GetDefaultAudioInfo fails): every game is silent and
-    # its cfg keeps an empty <sound_map>. mame_sound (group_vars/<arch>.yml) picks another
-    # module. mame.ini is MAUI's (BO settings) and written by its -createconfig, which keeps the
-    # values of an existing file: create it first, as /usr/games/mame would, and only ever
-    # replace `sound auto`, never a module chosen later. A --check run may lack MAME or the file.
-    - name: Create the kiosk user's MAME home
-      become: false
-      ansible.builtin.file:
-        path: "{{ kiosk_home }}/.mame"
-        state: directory
-        mode: "0775"
-      register: mame_home_created
-      when: mame_sound | length > 0
+        # Debian's mame.ini (copied to ~/.mame by /usr/games/mame) lists $HOME/mame/<kind> first,
+        # then folders of /usr/local/share and /usr/share that root owns. MAUI imports a starter pack
+        # into the first one that exists: without these, the ROMs go to /usr/local (EACCES).
+        - name: Create the kiosk user's MAME folders (first in Debian's rompath, samplepath...)
+          become: false
+          ansible.builtin.file:
+            path: "{{ kiosk_home }}/mame/{{ item }}"
+            state: directory
+            mode: "0755"
+          loop: [roms, samples, artwork, crosshair, cheat]
 
-    - name: Create the kiosk user's mame.ini from Debian's default
-      become: false
-      ansible.builtin.copy:
-        src: /usr/lib/mame/mame.ini.default
-        remote_src: true
-        dest: "{{ kiosk_home }}/.mame/mame.ini"
-        force: false
-        mode: "0644"
-      register: mame_ini_created
-      when: >-
-        mame_sound | length > 0 and not (ansible_check_mode and
-        (mame_deb_copy.changed or mame_home_created is changed))
+        # MAME 0.289's sdl sound module maps a game's speakers to SDL's default device only, and
+        # SDL2's ALSA backend has none (SDL_GetDefaultAudioInfo fails): every game is silent and
+        # its cfg keeps an empty <sound_map>. mame_sound (group_vars/<arch>.yml) picks another
+        # module. mame.ini is MAUI's (BO settings) and written by its -createconfig, which keeps the
+        # values of an existing file: create it first, as /usr/games/mame would, and only ever
+        # replace `sound auto`, never a module chosen later. A --check run may lack MAME or the file.
+        - name: Create the kiosk user's MAME home
+          become: false
+          ansible.builtin.file:
+            path: "{{ kiosk_home }}/.mame"
+            state: directory
+            mode: "0775"
+          register: mame_home_created
+          when: mame_sound | length > 0
 
-    # Debian's default has no sound line: MAME reads the missing ones as their defaults.
-    - name: Set MAME's sound module in a new mame.ini
-      become: false
-      ansible.builtin.lineinfile:
-        path: "{{ kiosk_home }}/.mame/mame.ini"
-        regexp: '^sound\s'
-        line: "sound                     {{ mame_sound }}"
-      when: mame_ini_created is changed and not ansible_check_mode
+        - name: Create the kiosk user's mame.ini from Debian's default
+          become: false
+          ansible.builtin.copy:
+            src: /usr/lib/mame/mame.ini.default
+            remote_src: true
+            dest: "{{ kiosk_home }}/.mame/mame.ini"
+            force: false
+            mode: "0644"
+          register: mame_ini_created
+          when: >-
+            mame_sound | length > 0 and not (ansible_check_mode and
+            (mame_deb_copy.changed or mame_home_created is changed))
 
-    - name: Replace MAME's sound auto in an existing mame.ini
-      become: false
-      ansible.builtin.replace:
-        path: "{{ kiosk_home }}/.mame/mame.ini"
-        regexp: '^sound(\s+)auto\s*$'
-        replace: 'sound\g<1>{{ mame_sound }}'
-      when: >-
-        mame_sound | length > 0 and not (ansible_check_mode and
-        (mame_deb_copy.changed or mame_home_created is changed or mame_ini_created is changed))
+        # Debian's default has no sound line: MAME reads the missing ones as their defaults.
+        - name: Set MAME's sound module in a new mame.ini
+          become: false
+          ansible.builtin.lineinfile:
+            path: "{{ kiosk_home }}/.mame/mame.ini"
+            regexp: '^sound\s'
+            line: "sound                     {{ mame_sound }}"
+          when: mame_ini_created is changed and not ansible_check_mode
+
+        - name: Replace MAME's sound auto in an existing mame.ini
+          become: false
+          ansible.builtin.replace:
+            path: "{{ kiosk_home }}/.mame/mame.ini"
+            regexp: '^sound(\s+)auto\s*$'
+            replace: 'sound\g<1>{{ mame_sound }}'
+          when: >-
+            mame_sound | length > 0 and not (ansible_check_mode and
+            (mame_deb_copy.changed or mame_home_created is changed or mame_ini_created is changed))
 
     # --- MAUI ------------------------------------------------------------------------------
     - name: Create the MAUI config directory
