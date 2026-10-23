@@ -5,3 +5,15 @@ expected_architecture: x86_64
 # gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \(.digest)"'
 maui_appimage_arch: x86_64
 maui_appimage_sha256: "9fda9abcbe94da74c586c42c7a80c5126794bf7aa27767dab67c484964a8baab"
+
+# MAME packages, in install order (files/, from the mame_release; sha256sum files/<file>).
+# Debian sid's mame source rebuilt for Debian 13 (just build-mame); mame needs this exact mame-data.
+mame_debs:
+  - file: mame-data_0.289+dfsg1-1~bpo13+1_all.deb
+    sha256: "eaf9f6b76cf5051de81cc401b99b8c67978d15a75db8d47062b6820f694c3990"
+  - file: mame_0.289+dfsg1-1~bpo13+1_amd64.deb
+    sha256: "a0edd6ed8a867ed97dac79d35fa2d1053df1b0aee6712ec787f53ed1c9582dd2"
+
+# MAME sound module written into the kiosk user's mame.ini (cabinet.yml). MAME 0.289's default
+# here, sdl, is silent with Debian's SDL2 on ALSA (no default device): portaudio has one.
+mame_sound: portaudio

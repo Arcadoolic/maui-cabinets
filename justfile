@@ -8,9 +8,24 @@ bin := venv / "bin"
 inventory := "inventory"
 vault_args := if path_exists(inventory / ".vault-pass") == "true" { "--vault-password-file " + inventory / ".vault-pass" } else { "" }
 
-# List available recipes
+# Show the steps of a deployment, then the recipes
 default:
+    @echo "Deploy a MAUI cabinet, step by step (README.md has the details):"
+    @echo "  1. just setup          once: Ansible in .venv/"
+    @echo "  2. just add <host>     declare the cabinet, guided (SSH key, sound output)"
+    @echo "  3. just check <host>   dry run, changes nothing"
+    @echo "  4. just apply <host>   install MAME and MAUI on the cabinet"
+    @echo "  or: just iso           a USB installer that does all of it on an x86_64 PC"
+    @echo
     @just --list
+
+# Declare a new cabinet, guided: SSH key, then architecture and sound read from the machine
+add host: _check-venv
+    {{bin}}/python scripts/add_cabinet.py {{host}} --inventory {{inventory}} --ansible-bin {{bin}}
+
+# Build a Debian 13 installation ISO that sets up a cabinet with no questions (just iso --help)
+iso *args:
+    scripts/build_iso.sh {{args}}
 
 # Create the virtualenv with Ansible and the collections it needs (safe to run again)
 setup:
@@ -18,7 +33,24 @@ setup:
     {{bin}}/pip install --quiet --upgrade pip
     {{bin}}/pip install --quiet -r requirements.txt
     {{bin}}/ansible-galaxy collection install -r requirements.yml
+    @just fetch-mame
     @echo "Ready: {{bin}}/ansible-playbook --version"
+
+# Rebuild Debian sid's MAME source for Debian 13, amd64, into files/ (about 20 minutes on 16 cores, container)
+build-mame *version:
+    scripts/build_mame_deb.sh {{version}}
+
+# Download the MAME packages of group_vars/<arch>.yml into files/ (GitHub release, needs gh)
+fetch-mame:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    release=$(sed -n 's/^mame_release: *//p' group_vars/all.yml)
+    command -v gh > /dev/null || { echo "error: gh is missing (https://cli.github.com), needed to download the $release packages." >&2; exit 1; }
+    mkdir -p files
+    gh release download "$release" --repo Arcadoolic/maui-cabinets --dir files --pattern '*.deb' --skip-existing
+    # Same check as the playbook: the sha256 of each package listed in group_vars/.
+    grep -h -A1 -- '- file: ' group_vars/*.yml | paste - - | sed -E 's/.*file: *([^ ]+).*sha256: *"([0-9a-f]+)".*/\2  files\/\1/' | sha256sum --check --quiet
+    echo "MAME packages ($release) in files/."
 
 # Fail fast when just setup has not been run
 _check-venv:

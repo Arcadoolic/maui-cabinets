@@ -2,3 +2,12 @@
 # Without it X picks the screen's native mode: 3840x2160 on a 4K screen, too heavy for
 # Electron + MAME. Empty string keeps the native mode. Override per cabinet in host_vars/.
 kiosk_resolution: "1920x1080"
+
+# Send the sound to the HDMI port a screen is plugged in at the start of each kiosk session
+# (~/.asoundrc written by ~/.xinitrc), when alsa_hdmi_card/alsa_hdmi_device is an HDMI port.
+# false keeps the host_vars output whatever the screen. Override per cabinet in host_vars/.
+alsa_follow_screen: true
+
+# Release of this repository holding the MAME packages (mame_debs in group_vars/<arch>.yml),
+# downloaded into files/ by just setup. A new MAME version gets a new release.
+mame_release: mame-0.289
