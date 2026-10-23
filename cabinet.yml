@@ -74,6 +74,10 @@
       - iw
       - rfkill
       - bluez
+      # The cabinet answers as <hostname>.local (mDNS): the ISO's preseed installs them, a
+      # cabinet installed by hand had neither and could only be reached by its IP.
+      - avahi-daemon
+      - libnss-mdns
 
   handlers:
     - name: Reload systemd
