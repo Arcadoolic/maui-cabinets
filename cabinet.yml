@@ -374,6 +374,39 @@
         - Reload systemd
         - Restart kiosk session
 
+    # --- Wi-Fi power saving (every cabinet: Wi-Fi may be set later from the BO) ------------
+    # With power saving on, an Intel card stays associated but misses incoming connections: the
+    # BO, reached from a phone on the same network, did not answer for a whole evening while
+    # the cabinet's own logs showed no disconnection. 2 = disable, for every Wi-Fi connection.
+    - name: Switch Wi-Fi power saving off
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/90-maui-wifi-powersave.conf
+        content: |
+          # Managed by Ansible (maui-cabinets, cabinet.yml)
+          [connection]
+          wifi.powersave=2
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload NetworkManager
+
+    # NetworkManager applies the setting when a connection comes up: switch it off now on the
+    # active cards too, without dropping the connection Ansible may be using. Skipped by a first
+    # --check run: iw is not installed yet.
+    - name: Switch power saving off on the active Wi-Fi cards
+      ansible.builtin.shell:
+        cmd: |
+          for dir in /sys/class/net/*/wireless; do
+            [ -e "$dir" ] || continue
+            dev=$(basename "$(dirname "$dir")")
+            if /usr/sbin/iw dev "$dev" get power_save 2>/dev/null | grep -q ': on'; then
+              /usr/sbin/iw dev "$dev" set power_save off && echo "$dev"
+            fi
+          done
+      register: wifi_powersave_now
+      changed_when: wifi_powersave_now.stdout | length > 0
+      when: not ansible_check_mode
+
     # --- Netskope client (company cabinets: hosts that define netskope_tenant_host) ---------
     # STAgent.run is a one-shot installer: it sets up /opt/netskope/stagent and the stagentd
     # service, which starts at every boot, then enrols the machine in the tenant. Nothing has to
