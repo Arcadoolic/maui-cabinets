@@ -425,6 +425,39 @@
       changed_when: wifi_powersave_now.stdout | length > 0
       when: not ansible_check_mode
 
+    # --- Bluetooth USB autosuspend (every cabinet with a USB Bluetooth adapter) --------------
+    # Debian's btusb lets the kernel suspend the adapter when idle (enable_autosuspend=Y, seen on
+    # the NUC cabinets' Intel adapters): a pad switched on again then fails to reconnect and has
+    # to be paired again. The module option holds from the next boot; Raspberry Pis' UART
+    # adapters do not use btusb and are not concerned.
+    - name: Keep the Bluetooth USB adapter out of autosuspend
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/90-maui-btusb-autosuspend.conf
+        content: |
+          # Managed by Ansible (maui-cabinets, cabinet.yml)
+          options btusb enable_autosuspend=0
+        owner: root
+        group: root
+        mode: "0644"
+
+    # The option is only read when btusb binds the adapter: keep the adapter awake now too,
+    # without unloading btusb (that would drop the pads already connected).
+    - name: Keep the active Bluetooth USB adapters awake
+      ansible.builtin.shell:
+        cmd: |
+          for hci in /sys/class/bluetooth/hci*; do
+            [ -e "$hci/device" ] || continue
+            intf=$(readlink -f "$hci/device")
+            grep -q '^DRIVER=btusb$' "$intf/uevent" 2>/dev/null || continue
+            control="$intf/../power/control"
+            if [ "$(cat "$control")" != on ]; then
+              echo on > "$control" && basename "$hci"
+            fi
+          done
+      register: bt_autosuspend_now
+      changed_when: bt_autosuspend_now.stdout | length > 0
+      when: not ansible_check_mode
+
     # --- Netskope client (company cabinets: hosts that define netskope_tenant_host) ---------
     # STAgent.run is a one-shot installer: it sets up /opt/netskope/stagent and the stagentd
     # service, which starts at every boot, then enrols the machine in the tenant. Nothing has to
