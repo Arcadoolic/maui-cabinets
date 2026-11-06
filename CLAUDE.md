@@ -38,7 +38,7 @@ just iso [--help]      # Debian 13 netinst ISO with preseed: installs a cabinet 
 
 ## Rules
 
-- **Become is `su` with the root password** (`ansible.cfg`): the kiosk user has no general sudo rights. The only sudoers rule is the exact `systemctl restart/reset-failed getty@tty1` pair, which must match maui's `src/class/KioskRestart.ts`. Root reached with `su` has no `/usr/sbin` in its PATH: use absolute paths (`/usr/sbin/sysctl`, `/usr/sbin/visudo`).
+- **Become is `su` with the root password** (`ansible.cfg`): the kiosk user has no general sudo rights. The only sudoers rule is the exact `systemctl restart/reset-failed getty@tty1` pair plus `systemctl poweroff` (the front's shutdown hotkey), which must match maui's `src/class/KioskRestart.ts`. Root reached with `su` has no `/usr/sbin` in its PATH: use absolute paths (`/usr/sbin/sysctl`, `/usr/sbin/visudo`).
 - **Never replace what MAUI or the BO owns**: `~/squashfs-root` is extracted only when absent (`creates:`), and the MAUI config is templated with `force: false`. Updates of an installed cabinet go through the BO (MAUI > Update).
 - **Bumping MAME**: `just build-mame` (x86_64), the arm64 package, a new `mame-<version>` GitHub release with every `.deb`, then `mame_release` in `group_vars/all.yml` and `mame_debs` (file names, sha256) in both `<arch>.yml`. Homebrew is gone on purpose (too slow): do not bring it back. MAUI's `mamePath` is `/usr/games`, plugins `/usr/share/games/mame/plugins`.
 - **Bumping MAUI** for new cabinets: `maui_version` in `cabinet.yml` plus both `maui_appimage_sha256` in `group_vars/x86_64.yml` and `group_vars/arm64.yml`, from `gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \(.digest)"'`. Update the version quoted in `README.md` too.

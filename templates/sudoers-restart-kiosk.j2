@@ -1,4 +1,6 @@
 # {{ ansible_managed }}
 # Lets the cabinet user restart its own kiosk session (autologin on tty1), e.g. after a MAUI
-# update from the BO. Exact commands only, no wildcard: must match maui's src/class/KioskRestart.ts.
-{{ kiosk_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart getty@tty1, /usr/bin/systemctl reset-failed getty@tty1
+# update from the BO, and power the cabinet off from MAUI's "Shut the cabinet down" hotkey
+# (without sudo, polkit refuses it while an SSH session is open). Exact commands only, no
+# wildcard: must match maui's src/class/KioskRestart.ts.
+{{ kiosk_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart getty@tty1, /usr/bin/systemctl reset-failed getty@tty1, /usr/bin/systemctl poweroff
