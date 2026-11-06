@@ -291,9 +291,11 @@ gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \
 
 MAME is installed from `.deb` packages, listed per architecture with their sha256 in
 `mame_debs` (`group_vars/x86_64.yml`, `group_vars/arm64.yml`): `/usr/games/mame`, plugins in
-`/usr/share/games/mame/plugins`, the user's MAME folder `~/.mame`. ROMs, samples and artwork go to
-`~/mame/roms`, `~/mame/samples`... (created by the playbook: they come first in Debian's `mame.ini`,
-before folders of `/usr/local` and `/usr/share` that the kiosk user cannot write). Debian 13 only ships MAME
+`/usr/share/games/mame/plugins`, the user's MAME folder `~/.mame`. ROMs, samples, artwork and
+controller files go to `~/.mame/roms`, `~/.mame/samples`, `~/.mame/ctrlr`... The playbook creates
+these folders and puts them first in the search paths of Debian's `mame.ini`, as MAUI does when its
+MAME step is saved. Debian's own folders stay after them: `~/mame/roms` (where older installs put
+the ROMs), then folders of `/usr/local` and `/usr/share` that the kiosk user cannot write. Debian 13 only ships MAME
 0.276, so:
 
 - **x86_64**: Debian sid's `mame` and `mame-data` source, rebuilt on Debian 13 with
