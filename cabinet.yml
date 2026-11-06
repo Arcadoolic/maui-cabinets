@@ -371,7 +371,7 @@
         mode: "0644"
       notify: Restart kiosk session
 
-    - name: Allow the kiosk user to restart its session from the BO (validated by visudo)
+    - name: Allow the kiosk user to restart its session from the BO and power off (validated by visudo)
       ansible.builtin.template:
         src: sudoers-restart-kiosk.j2
         dest: "/etc/sudoers.d/{{ kiosk_user }}-restart-kiosk"
