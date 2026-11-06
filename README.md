@@ -7,7 +7,7 @@ starts on boot, sound, and the back office (BO) on port 80. It automates the ste
 from the [maui](https://github.com/Arcadoolic/maui) repository; read that document for the
 reasoning behind each step.
 
-New cabinets get **MAUI 2.16.1** (`maui_version` in `cabinet.yml`).
+New cabinets get **MAUI 2.20.1** (`maui_version` in `cabinet.yml`).
 
 ## Prerequisites
 
