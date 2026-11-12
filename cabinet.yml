@@ -28,7 +28,7 @@
   become: true
 
   vars:
-    maui_version: "2.16.1"
+    maui_version: "2.21.0"
     # maui_appimage_arch and maui_appimage_sha256 come from group_vars/<architecture>.yml
     maui_appimage: "mame-awesome-ui-{{ maui_version }}-linux-{{ maui_appimage_arch }}.AppImage"
     maui_appimage_url: "https://github.com/Arcadoolic/maui/releases/download/{{ maui_version }}/{{ maui_appimage }}"
@@ -371,7 +371,7 @@
         mode: "0644"
       notify: Restart kiosk session
 
-    - name: Allow the kiosk user to restart its session from the BO (validated by visudo)
+    - name: Allow the kiosk user to restart its session from the BO and power off (validated by visudo)
       ansible.builtin.template:
         src: sudoers-restart-kiosk.j2
         dest: "/etc/sudoers.d/{{ kiosk_user }}-restart-kiosk"
