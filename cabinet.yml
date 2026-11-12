@@ -28,7 +28,7 @@
   become: true
 
   vars:
-    maui_version: "2.20.1"
+    maui_version: "2.21.0"
     # maui_appimage_arch and maui_appimage_sha256 come from group_vars/<architecture>.yml
     maui_appimage: "mame-awesome-ui-{{ maui_version }}-linux-{{ maui_appimage_arch }}.AppImage"
     maui_appimage_url: "https://github.com/Arcadoolic/maui/releases/download/{{ maui_version }}/{{ maui_appimage }}"

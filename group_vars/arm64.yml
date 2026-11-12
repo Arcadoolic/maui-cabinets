@@ -4,7 +4,7 @@ expected_architecture: aarch64
 # Release asset suffix (mame-awesome-ui-<version>-linux-<arch>.AppImage) and its digest:
 # gh api repos/Arcadoolic/maui/releases/tags/<version> -q '.assets[] | "\(.name) \(.digest)"'
 maui_appimage_arch: arm64
-maui_appimage_sha256: "84ea09abd447dc7b5e2de334453021ac4ea4711498f74f719f382b798f4bc0b8"
+maui_appimage_sha256: "74bd7fe3b6298b6e35cecb38d35f1ab5c91e32f4ae677686ec9c3166a1e29ccd"
 
 # MAME packages, in install order (files/, from the mame_release; sha256sum files/<file>).
 # Upstream mame0289 built for arm64 into one package laid out like Debian's mame + mame-data.
